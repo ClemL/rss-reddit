@@ -66,6 +66,10 @@ The cron therefore refreshes **every tab at the default time window only** — n
 requests, spaced `REFRESH_DELAY_MS` apart. Other windows are fetched on demand the
 first time a reader selects one, then cached like anything else.
 
+The whole run shares one deadline (`REFRESH_BUDGET_MS`). Tabs it does not reach before
+that deadline are reported as skipped and left to the next run, rather than the run being
+killed at `maxDuration` with nothing reported at all.
+
 To refresh something specific by hand:
 
 ```bash
@@ -178,6 +182,34 @@ Reddit. The page then explains what happened, links out to the subreddit, and of
 retry. It deliberately renders **no** placeholder or bundled sample posts, because
 fabricated entries presented as live Reddit data would be worse than an honest empty page.
 
+### Time budgets
+
+Every request the app makes is bounded, and every entry point has a deadline.
+
+`fetch` has no default timeout. An upstream that accepts a connection and then never
+answers will therefore hold a request open indefinitely, and on Vercel the visible result
+is not a slow page but a `FUNCTION_INVOCATION_TIMEOUT` — the platform kills the function
+at its `maxDuration` and returns a 504 gateway error, so nothing the app would have
+rendered is ever sent. The cached snapshot and the empty state are both useless if the
+render never gets to produce them.
+
+So:
+
+- Every call to Reddit and to the KV store carries an `AbortSignal.timeout`
+  (`UPSTREAM_TIMEOUT_MS`, `KV_TIMEOUT_MS`).
+- A page render and a cron run each set one **absolute deadline** at the start
+  (`RENDER_BUDGET_MS`, `REFRESH_BUDGET_MS`) and pass it down. Each request's timeout is
+  clamped to whatever is left of it, and a request with less than `MIN_FETCH_BUDGET_MS`
+  remaining is skipped rather than started, so a fallback attempt can never double the
+  cost of the render it is meant to rescue.
+- The deadlines sit well below the `maxDuration` exported by the page (30 s) and by
+  `/api/refresh` (60 s). Those platform limits are the backstop; the app is meant to
+  answer first, with data or with an honest empty state.
+
+Timing out a fetch does not cost the Next.js fetch cache: Next.js still caches a request
+that carries a signal, and drops the signal when it revalidates the entry in the
+background.
+
 ### Rate limiting (HTTP 429)
 
 This is the most likely problem you will hit in production, and it is usually not caused
@@ -234,6 +266,11 @@ with no configuration at all. See `.env.example`.
 | `RENDER_FETCH_ATTEMPTS` | `2`                      | Upstream attempts allowed during a page render                  |
 | `REFRESH_FETCH_ATTEMPTS` | `3`                     | Upstream attempts allowed in `/api/refresh`                     |
 | `REFRESH_DELAY_MS`    | `1500`                     | Pause between the cron's per-filter requests                    |
+| `UPSTREAM_TIMEOUT_MS` | `8000`                     | Hard ceiling on one request to Reddit                           |
+| `RENDER_BUDGET_MS`    | `9000`                     | Total I/O time a page render may spend before giving up          |
+| `REFRESH_BUDGET_MS`   | `45000`                    | Total time one `/api/refresh` run may spend                     |
+| `KV_TIMEOUT_MS`       | `2000`                     | Hard ceiling on one KV request                                  |
+| `MIN_FETCH_BUDGET_MS` | `400`                      | Remaining budget below which a request is skipped, not started   |
 | `REDDIT_USER_AGENT`   | `web:rss-reddit:1.0.0 …`   | Descriptive user agent, as Reddit asks for                      |
 | `REDDIT_BASE_URL`     | `https://www.reddit.com`   | Feed origin; for pointing at a local mock in testing            |
 | `NEXT_PUBLIC_DEFAULT_DENSITY` | `cozy`             | `cozy`, `compact`, or `dense` for first-time readers             |
@@ -398,10 +435,11 @@ src/
     href.ts               builds tab/time-window URLs
     density.ts            density levels and the pre-paint init script
     atom.ts               Atom parsing and post normalization
-    http.ts               retrying fetch, backoff, Retry-After handling
-    feed.ts               caching, stale fallback, refresh
+    http.ts               fetch with timeouts, retries, backoff, Retry-After
+    feed.ts               caching, deadlines, stale fallback, refresh
     kv.ts                 Redis-over-HTTP client
     time.ts               relative time and host formatting
+    __mocks__/            test stand-in for `server-only`, wired up in vitest.config.ts
 vercel.json               cron schedule
 ```
 

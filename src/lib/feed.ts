@@ -3,16 +3,21 @@ import "server-only";
 import { revalidateTag } from "next/cache";
 
 import { parseAtomFeed, type RedditPost } from "@/lib/atom";
-import { UpstreamError, fetchWithRetry } from "@/lib/http";
+import { UpstreamError, budgetFor, fetchOnce, fetchWithRetry, readBody } from "@/lib/http";
 import { kvEnabled, kvGetJson, kvSetJson } from "@/lib/kv";
 import type { FeedSource } from "@/lib/source";
 import {
   FEED_SOURCE,
+  KV_TIMEOUT_MS,
+  MIN_FETCH_BUDGET_MS,
   POST_COUNT,
+  REFRESH_BUDGET_MS,
   REFRESH_FETCH_ATTEMPTS,
+  RENDER_BUDGET_MS,
   RENDER_FETCH_ATTEMPTS,
   REVALIDATE_SECONDS,
   STALE_AFTER_SECONDS,
+  UPSTREAM_TIMEOUT_MS,
   USER_AGENT,
   feedUrl,
   type TimeFilter,
@@ -40,6 +45,18 @@ export interface FeedResult {
 }
 
 /**
+ * Time bounds for one call. Every caller runs inside a serverless function with
+ * a wall-clock limit, so the work is given an absolute deadline rather than a
+ * per-step timeout: whatever remains is what the next step may spend, and once
+ * it is gone the call returns what it has instead of being killed by the
+ * platform mid-render.
+ */
+export interface FeedOptions {
+  /** Absolute epoch milliseconds by which the caller needs an answer. */
+  deadline?: number;
+}
+
+/**
  * When true, page renders never contact Reddit — only the cron route does.
  * Off by default so a deployment without a working cron still self-heals.
  */
@@ -50,6 +67,11 @@ const STRICT_CACHE_ONLY = process.env.STRICT_CACHE_ONLY === "1";
  * this is a best-effort backstop for the no-KV deployment, not durable storage.
  */
 const memoryCache = new Map<string, FeedSnapshot>();
+
+/** Milliseconds left before the deadline; never negative. */
+function remainingMs(deadline: number): number {
+  return Math.max(0, deadline - Date.now());
+}
 
 function cacheKey(source: FeedSource, filter: TimeFilter): string {
   return `feed:${source.key}:${filter}`;
@@ -97,6 +119,7 @@ async function fetchSnapshot(
   source: FeedSource,
   filter: TimeFilter,
   mode: "live" | "cached",
+  deadline: number,
   attempts: number = 1,
 ): Promise<FeedSnapshot> {
   const url = feedUrl(source, filter);
@@ -112,12 +135,18 @@ async function fetchSnapshot(
   };
 
   // Retrying a request that Next.js is caching would just re-read the same
-  // cached entry, so only the uncached "live" mode retries.
+  // cached entry, so only the uncached "live" mode retries. Either way the
+  // request is bounded by the smaller of the per-request timeout and the time
+  // left on the deadline.
+  //
+  // Next.js keeps caching a fetch that carries an `AbortSignal`, and drops the
+  // signal when it revalidates the entry in the background, so timing out the
+  // foreground request does not cost the cache.
   const response = mode === "live"
-    ? await fetchWithRetry(url, init, { attempts })
-    : await fetchOnceThroughCache(url, init);
+    ? await fetchWithRetry(url, init, { attempts, timeoutMs: UPSTREAM_TIMEOUT_MS, deadline })
+    : await fetchOnce(url, init, budgetFor(UPSTREAM_TIMEOUT_MS, deadline));
 
-  const xml = await response.text();
+  const xml = await readBody(response, attempts);
   const posts = parseAtomFeed(xml, POST_COUNT);
 
   if (posts.length === 0) {
@@ -136,42 +165,23 @@ async function fetchSnapshot(
   return { subreddit: source.label, filter, posts, fetchedAt };
 }
 
-/**
- * Single attempt through the Next.js fetch cache, normalized to the same error
- * type the retrying path throws.
- */
-async function fetchOnceThroughCache(url: string, init: RequestInit): Promise<Response> {
-  let response: Response;
-  try {
-    response = await fetch(url, init);
-  } catch (cause) {
-    throw new UpstreamError(`Network error contacting the feed: ${(cause as Error).message}`, {
-      attempts: 1,
-      cause,
-    });
-  }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => {});
-    throw new UpstreamError(`Reddit returned HTTP ${response.status}.`, {
-      status: response.status,
-      attempts: 1,
-    });
-  }
-  return response;
-}
-
 async function readCachedSnapshot(
   source: FeedSource,
   filter: TimeFilter,
+  deadline: number,
 ): Promise<{ snapshot: FeedSnapshot; source: FeedResult["source"] } | null> {
   const key = cacheKey(source, filter);
 
   if (kvEnabled) {
     try {
-      const snapshot = await kvGetJson<FeedSnapshot>(key);
+      const snapshot = await kvGetJson<FeedSnapshot>(
+        key,
+        Math.min(KV_TIMEOUT_MS, remainingMs(deadline)),
+      );
       if (snapshot?.posts?.length) return { snapshot, source: "kv" };
     } catch {
-      // Fall through to the in-memory backstop below.
+      // A slow or broken KV store must not decide the whole request: fall
+      // through to the in-memory backstop and, failing that, to Reddit.
     }
   }
 
@@ -179,12 +189,23 @@ async function readCachedSnapshot(
   return fromMemory ? { snapshot: fromMemory, source: "memory" } : null;
 }
 
-async function writeSnapshot(source: FeedSource, snapshot: FeedSnapshot): Promise<void> {
+async function writeSnapshot(
+  source: FeedSource,
+  snapshot: FeedSnapshot,
+  deadline: number,
+): Promise<void> {
   const key = cacheKey(source, snapshot.filter);
   memoryCache.set(key, snapshot);
   if (!kvEnabled) return;
   try {
-    await kvSetJson(key, snapshot);
+    // The data is already in hand, so this write is worth a short grace period
+    // past the deadline rather than being skipped and re-fetched next request —
+    // but never more than a KV request is allowed anywhere else.
+    const writeTimeoutMs = Math.min(
+      KV_TIMEOUT_MS,
+      Math.max(KV_TIMEOUT_MS / 2, remainingMs(deadline)),
+    );
+    await kvSetJson(key, snapshot, writeTimeoutMs);
   } catch {
     // A cache write failure must not fail the request that produced the data.
   }
@@ -199,8 +220,14 @@ async function writeSnapshot(source: FeedSource, snapshot: FeedSnapshot): Promis
 export async function getFeed(
   filter: TimeFilter,
   source: FeedSource = FEED_SOURCE,
+  options: FeedOptions = {},
 ): Promise<FeedResult> {
-  const cached = await readCachedSnapshot(source, filter);
+  // Defaulted here rather than at the call site so a caller that forgets still
+  // gets a bounded render: this function is what stands between a stalled
+  // Reddit connection and the platform's function timeout.
+  const deadline = options.deadline ?? Date.now() + RENDER_BUDGET_MS;
+
+  const cached = await readCachedSnapshot(source, filter, deadline);
 
   const serveCached = (
     hit: NonNullable<typeof cached>,
@@ -213,34 +240,47 @@ export async function getFeed(
     source: hit.source,
   });
 
+  const outOfTime = (): UpstreamError =>
+    new UpstreamError("Ran out of time before Reddit answered.", { attempts: 1, timeout: true });
+
+  /** Too little left to finish a request, so spending it would help nobody. */
+  const exhausted = (): boolean => remainingMs(deadline) < MIN_FETCH_BUDGET_MS;
+
+  const giveUp = (error: unknown): FeedResult =>
+    cached
+      ? serveCached(cached, error)
+      : {
+          snapshot: null,
+          stale: true,
+          error: describe(error, source, filter),
+          rateLimited: isRateLimited(error),
+          source: "none",
+        };
+
   if (kvEnabled) {
     if (cached && (!isExpired(cached.snapshot) || STRICT_CACHE_ONLY)) {
       return serveCached(cached);
     }
 
+    if (exhausted()) return giveUp(outOfTime());
+
     // Cache is empty or past its lifetime and the cron has not caught up.
     try {
-      const snapshot = await fetchSnapshot(source, filter, "live", RENDER_FETCH_ATTEMPTS);
-      await writeSnapshot(source, snapshot);
+      const snapshot = await fetchSnapshot(source, filter, "live", deadline, RENDER_FETCH_ATTEMPTS);
+      await writeSnapshot(source, snapshot, deadline);
       return { snapshot, stale: false, error: null, rateLimited: false, source: "kv" };
     } catch (error) {
-      return cached
-        ? serveCached(cached, error)
-        : {
-            snapshot: null,
-            stale: true,
-            error: describe(error, source, filter),
-            rateLimited: isRateLimited(error),
-            source: "none",
-          };
+      return giveUp(error);
     }
   }
+
+  if (exhausted()) return giveUp(outOfTime());
 
   // No KV store: Next.js's fetch cache holds the response for REVALIDATE_SECONDS,
   // so this call is a cache read on all but the first request of each interval.
   try {
-    const snapshot = await fetchSnapshot(source, filter, "cached");
-    await writeSnapshot(source, snapshot);
+    const snapshot = await fetchSnapshot(source, filter, "cached", deadline);
+    await writeSnapshot(source, snapshot, deadline);
     return {
       snapshot,
       stale: ageInSeconds(snapshot.fetchedAt) >= STALE_AFTER_SECONDS,
@@ -250,22 +290,18 @@ export async function getFeed(
     };
   } catch (cachedError) {
     if (cached) return serveCached(cached, cachedError);
+    if (exhausted()) return giveUp(cachedError);
 
     // Nothing cached anywhere: this is a cold start, and the single cached
     // attempt above cannot retry. Fall back to an uncached, retrying fetch so a
-    // transient rate limit does not leave the page permanently empty.
+    // transient rate limit does not leave the page permanently empty. It shares
+    // the same deadline, so this second try cannot double the render's cost.
     try {
-      const snapshot = await fetchSnapshot(source, filter, "live", RENDER_FETCH_ATTEMPTS);
-      await writeSnapshot(source, snapshot);
+      const snapshot = await fetchSnapshot(source, filter, "live", deadline, RENDER_FETCH_ATTEMPTS);
+      await writeSnapshot(source, snapshot, deadline);
       return { snapshot, stale: false, error: null, rateLimited: false, source: "memory" };
     } catch (liveError) {
-      return {
-        snapshot: null,
-        stale: true,
-        error: describe(liveError, source, filter),
-        rateLimited: isRateLimited(liveError),
-        source: "none",
-      };
+      return giveUp(liveError);
     }
   }
 }
@@ -277,10 +313,13 @@ export async function getFeed(
 export async function refreshFeed(
   filter: TimeFilter,
   source: FeedSource = FEED_SOURCE,
+  options: FeedOptions = {},
 ): Promise<FeedSnapshot> {
+  const deadline = options.deadline ?? Date.now() + REFRESH_BUDGET_MS;
+
   if (kvEnabled) {
-    const snapshot = await fetchSnapshot(source, filter, "live", REFRESH_FETCH_ATTEMPTS);
-    await writeSnapshot(source, snapshot);
+    const snapshot = await fetchSnapshot(source, filter, "live", deadline, REFRESH_FETCH_ATTEMPTS);
+    await writeSnapshot(source, snapshot, deadline);
     return snapshot;
   }
 
@@ -290,16 +329,18 @@ export async function refreshFeed(
   revalidateTag(feedTag(source, filter), { expire: 0 });
 
   try {
-    const snapshot = await fetchSnapshot(source, filter, "cached");
-    await writeSnapshot(source, snapshot);
+    const snapshot = await fetchSnapshot(source, filter, "cached", deadline);
+    await writeSnapshot(source, snapshot, deadline);
     return snapshot;
   } catch (error) {
     // The tag is already expired, so the next page render will try again. Spend
     // one retrying uncached fetch to refresh the in-memory last-known-good copy,
-    // which is what keeps the page populated until then.
+    // which is what keeps the page populated until then — but only if the run
+    // still has time for it, since both fetches share the one deadline.
     if (!(error instanceof UpstreamError)) throw error;
-    const snapshot = await fetchSnapshot(source, filter, "live", REFRESH_FETCH_ATTEMPTS);
-    await writeSnapshot(source, snapshot);
+    if (remainingMs(deadline) < MIN_FETCH_BUDGET_MS) throw error;
+    const snapshot = await fetchSnapshot(source, filter, "live", deadline, REFRESH_FETCH_ATTEMPTS);
+    await writeSnapshot(source, snapshot, deadline);
     return snapshot;
   }
 }
