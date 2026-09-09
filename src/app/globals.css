@@ -12,3 +12,137 @@ html {
 body {
   font-family: var(--font-sans);
 }
+
+/*
+ * Display density.
+ *
+ * Three levels, selected by the reader and stored per browser. The level is set
+ * as `data-density` on <html> by an inline script before first paint, so
+ * switching never flashes the wrong layout. Everything density-dependent is
+ * expressed as a custom property here rather than as conditional classes in the
+ * components, which keeps the markup identical across levels.
+ */
+:root,
+:root[data-density="cozy"] {
+  --d-list-gap: 0.75rem;
+  --d-card-pad-y: 1rem;
+  --d-card-pad-x: 1rem;
+  --d-card-radius: 0.5rem;
+  --d-card-border: 1px;
+  --d-rank-width: 1.5rem;
+  --d-gutter: 0.75rem;
+  --d-title-size: 1rem;
+  --d-title-leading: 1.4;
+  --d-meta-top: 0.625rem;
+  --d-meta-size: 0.75rem;
+  --d-excerpt-top: 0.5rem;
+  --d-excerpt-lines: 3;
+  --d-excerpt-size: 0.875rem;
+  --d-header-pad: 1.25rem;
+  --d-list-top: 1.5rem;
+}
+
+@media (min-width: 640px) {
+  :root,
+  :root[data-density="cozy"] {
+    --d-card-pad-y: 1.25rem;
+    --d-card-pad-x: 1.25rem;
+    --d-title-size: 1.125rem;
+    --d-gutter: 1rem;
+  }
+}
+
+:root[data-density="compact"] {
+  --d-list-gap: 0.375rem;
+  --d-card-pad-y: 0.625rem;
+  --d-card-pad-x: 0.75rem;
+  --d-card-radius: 0.375rem;
+  --d-card-border: 1px;
+  --d-rank-width: 1.25rem;
+  --d-gutter: 0.625rem;
+  --d-title-size: 0.9375rem;
+  --d-title-leading: 1.35;
+  --d-meta-top: 0.25rem;
+  --d-meta-size: 0.6875rem;
+  --d-excerpt-top: 0.25rem;
+  --d-excerpt-lines: 2;
+  --d-excerpt-size: 0.8125rem;
+  --d-header-pad: 0.875rem;
+  --d-list-top: 1rem;
+}
+
+/* Dense drops the excerpt and the card chrome entirely: a scannable link list. */
+:root[data-density="dense"] {
+  --d-list-gap: 0rem;
+  --d-card-pad-y: 0.3125rem;
+  --d-card-pad-x: 0.25rem;
+  --d-card-radius: 0rem;
+  --d-card-border: 0px;
+  --d-rank-width: 1.25rem;
+  --d-gutter: 0.5rem;
+  --d-title-size: 0.875rem;
+  --d-title-leading: 1.3;
+  --d-meta-top: 0.0625rem;
+  --d-meta-size: 0.6875rem;
+  --d-excerpt-top: 0rem;
+  --d-excerpt-lines: 0;
+  --d-excerpt-size: 0.8125rem;
+  --d-header-pad: 0.75rem;
+  --d-list-top: 0.75rem;
+}
+
+.post-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--d-list-gap);
+  margin-top: var(--d-list-top);
+}
+
+.post-card {
+  display: flex;
+  gap: var(--d-gutter);
+  padding: var(--d-card-pad-y) var(--d-card-pad-x);
+  border-radius: var(--d-card-radius);
+  border-width: var(--d-card-border);
+  border-style: solid;
+}
+
+/* With card borders off, a hairline divider keeps rows separable. */
+:root[data-density="dense"] .post-card + .post-card {
+  border-top-width: 1px;
+}
+
+.post-rank {
+  width: var(--d-rank-width);
+  flex-shrink: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.post-title {
+  font-size: var(--d-title-size);
+  line-height: var(--d-title-leading);
+}
+
+.post-excerpt {
+  margin-top: var(--d-excerpt-top);
+  font-size: var(--d-excerpt-size);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--d-excerpt-lines);
+  overflow: hidden;
+}
+
+/* line-clamp: 0 still renders a sliver, so hide the excerpt outright. */
+:root[data-density="dense"] .post-excerpt {
+  display: none;
+}
+
+.post-meta {
+  margin-top: var(--d-meta-top);
+  font-size: var(--d-meta-size);
+}
+
+.page-header {
+  padding-bottom: var(--d-header-pad);
+}

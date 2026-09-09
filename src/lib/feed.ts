@@ -5,13 +5,14 @@ import { revalidateTag } from "next/cache";
 import { parseAtomFeed, type RedditPost } from "@/lib/atom";
 import { UpstreamError, fetchWithRetry } from "@/lib/http";
 import { kvEnabled, kvGetJson, kvSetJson } from "@/lib/kv";
+import type { FeedSource } from "@/lib/source";
 import {
+  FEED_SOURCE,
   POST_COUNT,
   REFRESH_FETCH_ATTEMPTS,
   RENDER_FETCH_ATTEMPTS,
   REVALIDATE_SECONDS,
   STALE_AFTER_SECONDS,
-  SUBREDDIT,
   USER_AGENT,
   feedUrl,
   type TimeFilter,
@@ -50,13 +51,13 @@ const STRICT_CACHE_ONLY = process.env.STRICT_CACHE_ONLY === "1";
  */
 const memoryCache = new Map<string, FeedSnapshot>();
 
-function cacheKey(subreddit: string, filter: TimeFilter): string {
-  return `feed:${subreddit}:${filter}`;
+function cacheKey(source: FeedSource, filter: TimeFilter): string {
+  return `feed:${source.key}:${filter}`;
 }
 
 /** Each time filter is cached under its own key and its own revalidation tag. */
-export function feedTag(subreddit: string, filter: TimeFilter): string {
-  return `reddit-feed:${subreddit}:${filter}`;
+export function feedTag(source: FeedSource, filter: TimeFilter): string {
+  return `reddit-feed:${source.key}:${filter}`;
 }
 
 export function ageInSeconds(fetchedAt: string, now: number = Date.now()): number {
@@ -69,8 +70,8 @@ function isExpired(snapshot: FeedSnapshot, now: number = Date.now()): boolean {
   return ageInSeconds(snapshot.fetchedAt, now) >= REVALIDATE_SECONDS;
 }
 
-function describe(error: unknown, subreddit: string, filter: TimeFilter): string {
-  const context = `r/${subreddit} (t=${filter})`;
+function describe(error: unknown, source: FeedSource, filter: TimeFilter): string {
+  const context = `${source.label} (t=${filter})`;
   if (error instanceof UpstreamError) {
     const tries = error.attempts > 1 ? ` after ${error.attempts} attempts` : "";
     return `${error.message.replace(/\.$/, "")} for ${context}${tries}.`;
@@ -93,12 +94,12 @@ function isRateLimited(error: unknown): boolean {
  *   which is the fallback caching layer when no KV store is configured.
  */
 async function fetchSnapshot(
-  subreddit: string,
+  source: FeedSource,
   filter: TimeFilter,
   mode: "live" | "cached",
   attempts: number = 1,
 ): Promise<FeedSnapshot> {
-  const url = feedUrl(subreddit, filter);
+  const url = feedUrl(source, filter);
 
   const init: RequestInit = {
     headers: {
@@ -107,7 +108,7 @@ async function fetchSnapshot(
     },
     ...(mode === "live"
       ? { cache: "no-store" as const }
-      : { next: { revalidate: REVALIDATE_SECONDS, tags: [feedTag(subreddit, filter)] } }),
+      : { next: { revalidate: REVALIDATE_SECONDS, tags: [feedTag(source, filter)] } }),
   };
 
   // Retrying a request that Next.js is caching would just re-read the same
@@ -120,7 +121,7 @@ async function fetchSnapshot(
   const posts = parseAtomFeed(xml, POST_COUNT);
 
   if (posts.length === 0) {
-    throw new Error(`Feed for r/${subreddit} (t=${filter}) contained no entries.`);
+    throw new Error(`Feed for ${source.label} (t=${filter}) contained no entries.`);
   }
 
   // In "cached" mode the body may come from the fetch cache, in which case the
@@ -132,7 +133,7 @@ async function fetchSnapshot(
     ? new Date().toISOString()
     : new Date(parsedServedAt).toISOString();
 
-  return { subreddit, filter, posts, fetchedAt };
+  return { subreddit: source.label, filter, posts, fetchedAt };
 }
 
 /**
@@ -160,10 +161,10 @@ async function fetchOnceThroughCache(url: string, init: RequestInit): Promise<Re
 }
 
 async function readCachedSnapshot(
-  subreddit: string,
+  source: FeedSource,
   filter: TimeFilter,
 ): Promise<{ snapshot: FeedSnapshot; source: FeedResult["source"] } | null> {
-  const key = cacheKey(subreddit, filter);
+  const key = cacheKey(source, filter);
 
   if (kvEnabled) {
     try {
@@ -178,8 +179,8 @@ async function readCachedSnapshot(
   return fromMemory ? { snapshot: fromMemory, source: "memory" } : null;
 }
 
-async function writeSnapshot(snapshot: FeedSnapshot): Promise<void> {
-  const key = cacheKey(snapshot.subreddit, snapshot.filter);
+async function writeSnapshot(source: FeedSource, snapshot: FeedSnapshot): Promise<void> {
+  const key = cacheKey(source, snapshot.filter);
   memoryCache.set(key, snapshot);
   if (!kvEnabled) return;
   try {
@@ -197,9 +198,9 @@ async function writeSnapshot(snapshot: FeedSnapshot): Promise<void> {
  */
 export async function getFeed(
   filter: TimeFilter,
-  subreddit: string = SUBREDDIT,
+  source: FeedSource = FEED_SOURCE,
 ): Promise<FeedResult> {
-  const cached = await readCachedSnapshot(subreddit, filter);
+  const cached = await readCachedSnapshot(source, filter);
 
   const serveCached = (
     hit: NonNullable<typeof cached>,
@@ -207,7 +208,7 @@ export async function getFeed(
   ): FeedResult => ({
     snapshot: hit.snapshot,
     stale: error !== null || ageInSeconds(hit.snapshot.fetchedAt) >= STALE_AFTER_SECONDS,
-    error: error === null ? null : describe(error, subreddit, filter),
+    error: error === null ? null : describe(error, source, filter),
     rateLimited: isRateLimited(error),
     source: hit.source,
   });
@@ -219,8 +220,8 @@ export async function getFeed(
 
     // Cache is empty or past its lifetime and the cron has not caught up.
     try {
-      const snapshot = await fetchSnapshot(subreddit, filter, "live", RENDER_FETCH_ATTEMPTS);
-      await writeSnapshot(snapshot);
+      const snapshot = await fetchSnapshot(source, filter, "live", RENDER_FETCH_ATTEMPTS);
+      await writeSnapshot(source, snapshot);
       return { snapshot, stale: false, error: null, rateLimited: false, source: "kv" };
     } catch (error) {
       return cached
@@ -228,7 +229,7 @@ export async function getFeed(
         : {
             snapshot: null,
             stale: true,
-            error: describe(error, subreddit, filter),
+            error: describe(error, source, filter),
             rateLimited: isRateLimited(error),
             source: "none",
           };
@@ -238,8 +239,8 @@ export async function getFeed(
   // No KV store: Next.js's fetch cache holds the response for REVALIDATE_SECONDS,
   // so this call is a cache read on all but the first request of each interval.
   try {
-    const snapshot = await fetchSnapshot(subreddit, filter, "cached");
-    await writeSnapshot(snapshot);
+    const snapshot = await fetchSnapshot(source, filter, "cached");
+    await writeSnapshot(source, snapshot);
     return {
       snapshot,
       stale: ageInSeconds(snapshot.fetchedAt) >= STALE_AFTER_SECONDS,
@@ -254,14 +255,14 @@ export async function getFeed(
     // attempt above cannot retry. Fall back to an uncached, retrying fetch so a
     // transient rate limit does not leave the page permanently empty.
     try {
-      const snapshot = await fetchSnapshot(subreddit, filter, "live", RENDER_FETCH_ATTEMPTS);
-      await writeSnapshot(snapshot);
+      const snapshot = await fetchSnapshot(source, filter, "live", RENDER_FETCH_ATTEMPTS);
+      await writeSnapshot(source, snapshot);
       return { snapshot, stale: false, error: null, rateLimited: false, source: "memory" };
     } catch (liveError) {
       return {
         snapshot: null,
         stale: true,
-        error: describe(liveError, subreddit, filter),
+        error: describe(liveError, source, filter),
         rateLimited: isRateLimited(liveError),
         source: "none",
       };
@@ -275,30 +276,30 @@ export async function getFeed(
  */
 export async function refreshFeed(
   filter: TimeFilter,
-  subreddit: string = SUBREDDIT,
+  source: FeedSource = FEED_SOURCE,
 ): Promise<FeedSnapshot> {
   if (kvEnabled) {
-    const snapshot = await fetchSnapshot(subreddit, filter, "live", REFRESH_FETCH_ATTEMPTS);
-    await writeSnapshot(snapshot);
+    const snapshot = await fetchSnapshot(source, filter, "live", REFRESH_FETCH_ATTEMPTS);
+    await writeSnapshot(source, snapshot);
     return snapshot;
   }
 
   // Drop the tagged entry, then immediately re-populate it so the next visitor
   // is served from a warm fetch cache instead of triggering the refetch.
   // `{ expire: 0 }` expires the tag now rather than after a cacheLife profile.
-  revalidateTag(feedTag(subreddit, filter), { expire: 0 });
+  revalidateTag(feedTag(source, filter), { expire: 0 });
 
   try {
-    const snapshot = await fetchSnapshot(subreddit, filter, "cached");
-    await writeSnapshot(snapshot);
+    const snapshot = await fetchSnapshot(source, filter, "cached");
+    await writeSnapshot(source, snapshot);
     return snapshot;
   } catch (error) {
     // The tag is already expired, so the next page render will try again. Spend
     // one retrying uncached fetch to refresh the in-memory last-known-good copy,
     // which is what keeps the page populated until then.
     if (!(error instanceof UpstreamError)) throw error;
-    const snapshot = await fetchSnapshot(subreddit, filter, "live", REFRESH_FETCH_ATTEMPTS);
-    await writeSnapshot(snapshot);
+    const snapshot = await fetchSnapshot(source, filter, "live", REFRESH_FETCH_ATTEMPTS);
+    await writeSnapshot(source, snapshot);
     return snapshot;
   }
 }

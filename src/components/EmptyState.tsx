@@ -1,4 +1,4 @@
-import { subredditUrl } from "@/lib/config";
+import { FEED_SOURCE, sourceWebUrl } from "@/lib/config";
 
 /**
  * Shown only when the cache is completely cold *and* the feed could not be
@@ -53,12 +53,12 @@ export function EmptyState({
           Try again
         </a>
         <a
-          href={subredditUrl(subreddit)}
+          href={sourceWebUrl(FEED_SOURCE)}
           target="_blank"
           rel="noopener noreferrer"
           className="font-medium underline underline-offset-2 hover:text-neutral-900 dark:hover:text-white"
         >
-          Open r/{subreddit} on Reddit
+          Open {subreddit} on Reddit
         </a>
       </div>
 

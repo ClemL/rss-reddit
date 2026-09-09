@@ -13,16 +13,16 @@ export function PostCard({ post, rank }: { post: RedditPost; rank: number }) {
   const host = post.isSelfPost ? null : displayHost(post.url);
 
   return (
-    <li className="group flex gap-3 rounded-lg border border-neutral-200 bg-white p-4 transition-colors hover:border-neutral-300 sm:gap-4 sm:p-5 dark:border-neutral-800 dark:bg-neutral-900/40 dark:hover:border-neutral-700">
+    <li className="post-card group border-neutral-200 bg-white transition-colors hover:border-neutral-300 dark:border-neutral-800 dark:bg-neutral-900/40 dark:hover:border-neutral-700">
       <span
         aria-hidden="true"
-        className="w-6 shrink-0 pt-0.5 text-right text-sm tabular-nums text-neutral-300 dark:text-neutral-600"
+        className="post-rank pt-px text-sm text-neutral-300 dark:text-neutral-600"
       >
         {rank}
       </span>
 
       <div className="min-w-0 flex-1">
-        <h2 className="text-base leading-snug font-medium text-balance sm:text-lg">
+        <h2 className="post-title font-medium text-balance">
           <a
             href={post.url}
             target="_blank"
@@ -39,12 +39,12 @@ export function PostCard({ post, rank }: { post: RedditPost; rank: number }) {
         </h2>
 
         {post.excerpt ? (
-          <p className="mt-2 line-clamp-3 text-sm text-neutral-600 dark:text-neutral-400">
+          <p className="post-excerpt text-neutral-600 dark:text-neutral-400">
             {post.excerpt}
           </p>
         ) : null}
 
-        <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-neutral-500 dark:text-neutral-400">
+        <div className="post-meta flex flex-wrap items-center gap-x-3 gap-y-1 text-neutral-500 dark:text-neutral-400">
           <span>
             by{" "}
             {post.authorUrl ? (

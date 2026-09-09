@@ -28,6 +28,29 @@ Two things are deliberately absent from this app because they are absent from th
 - **No comments.** The feed carries no comment bodies or counts. Rather than making
   additional requests, each post links out to its Reddit comments page.
 
+## Display density
+
+A three-level density switch sits in the header. The choice is stored per browser
+in `localStorage`, so it persists between visits without appearing in the URL — it
+describes how the reader wants the page drawn, not what the page is showing.
+
+| Level     | Cards                          | Excerpts        | Measured list height |
+| --------- | ------------------------------ | --------------- | -------------------- |
+| Cozy      | Roomy, bordered, 18px titles   | Up to 3 lines   | 496 px (baseline)    |
+| Compact   | Tighter, bordered, 15px titles | Clamped to 2    | 336 px (−32%)        |
+| Dense     | Hairline rows, 14px titles     | Hidden          | 186 px (−63%)        |
+
+Heights are for the same four posts at a 900px viewport, measured in Chromium.
+
+Every density-dependent value is a CSS custom property in `globals.css`, so the
+markup is identical at all three levels and the switch changes nothing but
+variables. To retune a level, edit its block there rather than touching the
+components. `NEXT_PUBLIC_DEFAULT_DENSITY` sets the level for readers who have not
+chosen one.
+
+An inline script in the document head applies the stored density before first
+paint, so the page never renders at one density and visibly jumps to another.
+
 ## How the caching works
 
 The design goal is that ordinary visitor traffic never reaches Reddit. Reddit is
@@ -154,7 +177,7 @@ with no configuration at all. See `.env.example`.
 
 | Variable              | Default                    | Purpose                                                        |
 | --------------------- | -------------------------- | -------------------------------------------------------------- |
-| `SUBREDDIT`           | `programming`              | Subreddit to read, without the `r/` prefix                      |
+| `SUBREDDIT`           | `programming`              | Subreddit, `a+b+c` combination, or `user/<name>/m/<multi>`       |
 | `DEFAULT_TIME_FILTER` | `day`                      | `hour`, `day`, `week`, `month`, `year`, or `all`                |
 | `POST_COUNT`          | `10`                       | Posts rendered on the page                                      |
 | `REVALIDATE_SECONDS`  | `900`                      | Cache lifetime; governs refresh frequency in normal operation    |
@@ -167,13 +190,52 @@ with no configuration at all. See `.env.example`.
 | `REFRESH_DELAY_MS`    | `1500`                     | Pause between the cron's per-filter requests                    |
 | `REDDIT_USER_AGENT`   | `web:rss-reddit:1.0.0 …`   | Descriptive user agent, as Reddit asks for                      |
 | `REDDIT_BASE_URL`     | `https://www.reddit.com`   | Feed origin; for pointing at a local mock in testing            |
+| `NEXT_PUBLIC_DEFAULT_DENSITY` | `cozy`             | `cozy`, `compact`, or `dense` for first-time readers             |
 
-### Changing the subreddit
+### Changing the subreddit, or reading several at once
 
-Set `SUBREDDIT` (for example `SUBREDDIT=rust`) in `.env.local` locally, or in Project
-Settings → Environment Variables on Vercel, then redeploy. Nothing else is hardcoded to
-r/programming. Cache keys and revalidation tags include the subreddit name, so changing
-it does not collide with previously cached data.
+`SUBREDDIT` accepts three forms, all of which Reddit serves as public RSS with no
+authentication:
+
+| Setting                       | Reads                                      |
+| ----------------------------- | ------------------------------------------ |
+| `programming`                 | One subreddit                               |
+| `programming+rust+golang`     | Several subreddits merged into one listing  |
+| `user/cdawgg/m/tech`          | A user's **public** multireddit             |
+
+A full URL is accepted too, so `https://old.reddit.com/r/rust/` and `r/rust` and
+`rust` all work. Names are validated against Reddit's own rules before being placed
+in a URL, and anything unrecognized falls back to `programming` rather than failing
+the build. Cache keys and revalidation tags derive from the source, so switching does
+not collide with previously cached data.
+
+Set it in `.env.local` locally, or in Project Settings → Environment Variables on
+Vercel, then redeploy.
+
+### What is not possible: reading someone's subscriptions
+
+Pointing this app at a profile URL like `https://old.reddit.com/user/cdawgg/` to pull
+"the subreddits I subscribe to" **cannot work**, and not because of a missing feature.
+Reddit treats a subscription list as private account data. There is no public endpoint
+that exposes it — not RSS, not JSON — and no way to derive it from a profile page. The
+API endpoint that returns subscriptions, `/subreddits/mine/subscriber`, requires OAuth
+and always returns *the authenticated account's own* subscriptions; authenticating as
+one user never reveals another user's list. Passing a bare profile URL therefore fails
+with an explanation rather than silently doing something else.
+
+Two things do achieve the practical goal:
+
+- **A public multireddit.** Create one on Reddit, add the subreddits you want, set it
+  to public, and use `user/<you>/m/<name>`. This is the closest equivalent to a
+  subscription list, because its owner has explicitly chosen to publish it, and it
+  stays in sync when you edit it on Reddit.
+- **A combined list.** `SUBREDDIT=programming+rust+golang` needs no account at all,
+  but is fixed at deploy time.
+
+Reading *your own* live subscriptions would require adding a Reddit OAuth sign-in flow
+with the `mysubreddits` scope, so each visitor authenticates as themselves. That is a
+different application from this one — a personal reader rather than a public page — and
+is not implemented here.
 
 ### Changing the default time filter
 
@@ -273,15 +335,18 @@ src/
   app/
     layout.tsx            root layout and metadata
     page.tsx              the page; reads the cache, never Reddit directly
-    globals.css           Tailwind entry point
+    globals.css           Tailwind entry point and the density custom properties
     api/refresh/route.ts  cron target; refreshes and stores every time filter
   components/
     PostCard.tsx          one post
-    TimeFilterSelect.tsx  time window dropdown (the only client component)
+    TimeFilterSelect.tsx  time window dropdown (client)
+    DensityToggle.tsx     display density switch (client)
     StaleNotice.tsx       "data may be stale" badge
     EmptyState.tsx        cold-cache-and-unreachable explanation
   lib/
     config.ts             environment configuration and feed URLs
+    source.ts             parses SUBREDDIT into a subreddit, combination or multireddit
+    density.ts            density levels and the pre-paint init script
     atom.ts               Atom parsing and post normalization
     http.ts               retrying fetch, backoff, Retry-After handling
     feed.ts               caching, stale fallback, refresh

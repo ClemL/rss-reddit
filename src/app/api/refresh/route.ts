@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { REFRESH_DELAY_MS, SUBREDDIT, TIME_FILTERS, isTimeFilter, type TimeFilter } from "@/lib/config";
+import { FEED_SOURCE, REFRESH_DELAY_MS, TIME_FILTERS, isTimeFilter, type TimeFilter } from "@/lib/config";
 import { refreshFeed } from "@/lib/feed";
 import { UpstreamError } from "@/lib/http";
 
@@ -89,7 +89,7 @@ async function handle(request: Request): Promise<NextResponse> {
   return NextResponse.json(
     {
       ok: succeeded > 0,
-      subreddit: SUBREDDIT,
+      source: FEED_SOURCE.label,
       refreshedAt: new Date().toISOString(),
       succeeded,
       attempted: results.length,

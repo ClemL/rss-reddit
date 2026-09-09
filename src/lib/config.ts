@@ -1,3 +1,5 @@
+import { parseFeedSourceOrDefault, type FeedSource } from "@/lib/source";
+
 /**
  * Central configuration. Everything that a deployment might want to change
  * lives here so it is not scattered through the components.
@@ -26,8 +28,14 @@ function positiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
-/** Subreddit to read. Overridable so the build is not hardcoded to r/programming. */
-export const SUBREDDIT = process.env.SUBREDDIT?.trim().replace(/^\/?r\//, "") || "programming";
+/**
+ * Where the feed comes from. Accepts a single subreddit, several combined with
+ * `+`, or a public multireddit — see `src/lib/source.ts`.
+ */
+export const FEED_SOURCE: FeedSource = parseFeedSourceOrDefault(process.env.SUBREDDIT);
+
+/** Convenience alias for the source's display label, e.g. `r/programming`. */
+export const SUBREDDIT = FEED_SOURCE.label;
 
 /** How many posts the page renders. */
 export const POST_COUNT = positiveInt(process.env.POST_COUNT, 10);
@@ -81,10 +89,22 @@ export const REDDIT_BASE_URL = (process.env.REDDIT_BASE_URL?.trim() || "https://
   "",
 );
 
-export function feedUrl(subreddit: string, filter: TimeFilter): string {
-  return `${REDDIT_BASE_URL}/r/${encodeURIComponent(subreddit)}/top/.rss?t=${filter}`;
+/**
+ * Feed URL for a source. The path is already validated against Reddit's naming
+ * rules by `parseFeedSource`, so it is safe to interpolate directly — encoding
+ * it here would break the `+` that combines subreddits.
+ */
+export function feedUrl(source: FeedSource, filter: TimeFilter): string {
+  return `${REDDIT_BASE_URL}/${source.path}/top/.rss?t=${filter}`;
 }
 
-export function subredditUrl(subreddit: string): string {
-  return `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/`;
+/** The same listing on Reddit itself, for "open on Reddit" links. */
+export function sourceWebUrl(source: FeedSource, filter?: TimeFilter): string {
+  const base = `https://www.reddit.com/${source.path}`;
+  return filter ? `${base}/top/?t=${filter}` : `${base}/`;
+}
+
+/** Public RSS URL, shown in the footer so the data source is inspectable. */
+export function sourceFeedUrl(source: FeedSource, filter: TimeFilter): string {
+  return `https://www.reddit.com/${source.path}/top/.rss?t=${filter}`;
 }

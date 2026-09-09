@@ -1,14 +1,18 @@
+import { DensityToggle } from "@/components/DensityToggle";
 import { EmptyState } from "@/components/EmptyState";
 import { PostCard } from "@/components/PostCard";
 import { StaleNotice } from "@/components/StaleNotice";
 import { TimeFilterSelect } from "@/components/TimeFilterSelect";
 import {
   DEFAULT_TIME_FILTER,
+  FEED_SOURCE,
   POST_COUNT,
   SUBREDDIT,
   parseTimeFilter,
-  subredditUrl,
+  sourceFeedUrl,
+  sourceWebUrl,
 } from "@/lib/config";
+import { shortLabel } from "@/lib/source";
 import { ageInSeconds, getFeed } from "@/lib/feed";
 import { relativeTime } from "@/lib/time";
 
@@ -33,18 +37,19 @@ export default async function HomePage({
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6 sm:py-12">
-      <header className="border-b border-neutral-200 pb-5 dark:border-neutral-800">
+      <header className="page-header border-b border-neutral-200 dark:border-neutral-800">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
               Top {POST_COUNT} ·{" "}
               <a
-                href={subredditUrl(SUBREDDIT)}
+                href={sourceWebUrl(FEED_SOURCE, filter)}
                 target="_blank"
                 rel="noopener noreferrer"
+                title={FEED_SOURCE.label}
                 className="underline-offset-4 hover:underline"
               >
-                r/{SUBREDDIT}
+                {shortLabel(FEED_SOURCE)}
               </a>
             </h1>
             <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
@@ -52,7 +57,10 @@ export default async function HomePage({
             </p>
           </div>
 
-          <TimeFilterSelect value={filter} />
+          <div className="flex flex-wrap items-center gap-3">
+            <TimeFilterSelect value={filter} />
+            <DensityToggle />
+          </div>
         </div>
 
         {stale && snapshot ? (
@@ -61,7 +69,7 @@ export default async function HomePage({
       </header>
 
       {posts.length > 0 ? (
-        <ol className="mt-6 flex flex-col gap-3">
+        <ol className="post-list">
           {posts.map((post, index) => (
             <PostCard key={post.id} post={post} rank={index + 1} />
           ))}
@@ -74,7 +82,7 @@ export default async function HomePage({
         <p>
           Source:{" "}
           <a
-            href={`https://www.reddit.com/r/${SUBREDDIT}/top/.rss?t=${filter}`}
+            href={sourceFeedUrl(FEED_SOURCE, filter)}
             target="_blank"
             rel="noopener noreferrer"
             className="underline underline-offset-2"
