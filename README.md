@@ -28,6 +28,51 @@ Two things are deliberately absent from this app because they are absent from th
 - **No comments.** The feed carries no comment bodies or counts. Rather than making
   additional requests, each post links out to its Reddit comments page.
 
+## Topic tabs
+
+The header carries a row of tabs, each a named group of subreddits cached and
+refreshed independently. The defaults group 69 subreddits into nine topics (Dev,
+Data, Cloud & IT, AI, Boston, World, Learn, Culture, Tech & Fun); they live in
+`DEFAULT_TAB_DEFINITIONS` in `src/lib/tabs.ts` as ordinary source you can edit.
+
+Grouping is not only navigational. **Reddit returns about 25 entries per feed no
+matter how many subreddits are combined**, so a single listing of 69 subreddits is
+dominated by whichever handful post most and the quieter ones effectively never
+surface. Nine groups of three to twelve give each topic its own slice of the
+results.
+
+Tabs are plain links, so each is a distinct, shareable, separately cached URL
+(`/?tab=boston&t=week`) that works without JavaScript. Switching the time window
+keeps you on the current tab. The footer lists the raw Reddit RSS URL behind every
+tab, so the same groupings can be pasted into any feed reader.
+
+Override the tabs without touching the source using `FEED_TABS`:
+
+```
+FEED_TABS="Dev=programming+rust+golang;Local=boston+mbta;Mine=user/cdawgg/m/tech"
+```
+
+Groups are `Label=sub1+sub2`, separated by `;`. A public multireddit works as a
+group. A malformed group is skipped rather than failing the deployment, and if
+every group is malformed the defaults are used. Setting only `SUBREDDIT` collapses
+the app to a single tab and hides the tab bar, so single-subreddit deployments are
+unchanged.
+
+### Tabs and the refresh budget
+
+Nine tabs times six time windows would be 54 upstream requests per refresh, far
+beyond what Reddit's per-IP budget tolerates (see [Rate limiting](#rate-limiting-http-429)).
+The cron therefore refreshes **every tab at the default time window only** — nine
+requests, spaced `REFRESH_DELAY_MS` apart. Other windows are fetched on demand the
+first time a reader selects one, then cached like anything else.
+
+To refresh something specific by hand:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" ".../api/refresh?tab=boston&t=week"
+curl -H "Authorization: Bearer $CRON_SECRET" ".../api/refresh?all=1"   # every window; watch the budget
+```
+
 ## Display density
 
 A three-level density switch sits in the header. The choice is stored per browser
@@ -177,7 +222,8 @@ with no configuration at all. See `.env.example`.
 
 | Variable              | Default                    | Purpose                                                        |
 | --------------------- | -------------------------- | -------------------------------------------------------------- |
-| `SUBREDDIT`           | `programming`              | Subreddit, `a+b+c` combination, or `user/<name>/m/<multi>`       |
+| `FEED_TABS`           | nine topic tabs            | `Label=sub1+sub2;Label2=sub3` — overrides `SUBREDDIT`            |
+| `SUBREDDIT`           | unset                      | Single subreddit, `a+b+c`, or `user/<name>/m/<multi>`; one tab   |
 | `DEFAULT_TIME_FILTER` | `day`                      | `hour`, `day`, `week`, `month`, `year`, or `all`                |
 | `POST_COUNT`          | `10`                       | Posts rendered on the page                                      |
 | `REVALIDATE_SECONDS`  | `900`                      | Cache lifetime; governs refresh frequency in normal operation    |
@@ -341,11 +387,15 @@ src/
     PostCard.tsx          one post
     TimeFilterSelect.tsx  time window dropdown (client)
     DensityToggle.tsx     display density switch (client)
+    TabBar.tsx            topic tabs
+    FeedUrlList.tsx       raw RSS URL for each tab
     StaleNotice.tsx       "data may be stale" badge
     EmptyState.tsx        cold-cache-and-unreachable explanation
   lib/
     config.ts             environment configuration and feed URLs
-    source.ts             parses SUBREDDIT into a subreddit, combination or multireddit
+    source.ts             parses a subreddit, combination or multireddit
+    tabs.ts               topic tab definitions and resolution
+    href.ts               builds tab/time-window URLs
     density.ts            density levels and the pre-paint init script
     atom.ts               Atom parsing and post normalization
     http.ts               retrying fetch, backoff, Retry-After handling

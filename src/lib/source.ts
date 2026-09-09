@@ -36,6 +36,19 @@ const MULTI_NAME = /^[A-Za-z0-9_]{2,50}$/;
 
 export const DEFAULT_SOURCE_INPUT = "programming";
 
+/**
+ * FNV-1a, used only to keep cache keys short and stable for long combinations.
+ * Not a security primitive; collisions here would merely share a cache entry.
+ */
+function shortHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36).padStart(7, "0");
+}
+
 export class InvalidSourceError extends Error {
   constructor(message: string) {
     super(message);
@@ -105,11 +118,20 @@ export function parseFeedSource(raw: string): FeedSource {
   }
 
   const joined = names.join("+");
+  // A 12-subreddit combination would make an unwieldy cache key, so long
+  // combinations are identified by their first name plus a hash of the whole
+  // list. Editing a tab's subreddits therefore changes its key and retires the
+  // old cache entry instead of serving it under the new definition.
+  const key =
+    names.length === 1
+      ? `r_${names[0]}`
+      : `r_${names[0]}_and${names.length - 1}_${shortHash(joined)}`;
+
   return {
     kind: names.length > 1 ? "combined" : "subreddit",
     path: `r/${joined}`,
     label: `r/${joined}`,
-    key: names.join("_"),
+    key,
     subreddits: names,
   };
 }

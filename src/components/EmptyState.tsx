@@ -1,4 +1,5 @@
-import { FEED_SOURCE, sourceWebUrl } from "@/lib/config";
+import { sourceWebUrl } from "@/lib/config";
+import type { FeedSource } from "@/lib/source";
 
 /**
  * Shown only when the cache is completely cold *and* the feed could not be
@@ -9,11 +10,11 @@ import { FEED_SOURCE, sourceWebUrl } from "@/lib/config";
  * an honest empty page.
  */
 export function EmptyState({
-  subreddit,
+  source,
   rateLimited,
   error,
 }: {
-  subreddit: string;
+  source: FeedSource;
   rateLimited: boolean;
   error: string | null;
 }) {
@@ -53,12 +54,12 @@ export function EmptyState({
           Try again
         </a>
         <a
-          href={sourceWebUrl(FEED_SOURCE)}
+          href={sourceWebUrl(source)}
           target="_blank"
           rel="noopener noreferrer"
           className="font-medium underline underline-offset-2 hover:text-neutral-900 dark:hover:text-white"
         >
-          Open {subreddit} on Reddit
+          Open {source.label} on Reddit
         </a>
       </div>
 

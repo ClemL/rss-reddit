@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 
-import { FEED_SOURCE, REFRESH_DELAY_MS, TIME_FILTERS, isTimeFilter, type TimeFilter } from "@/lib/config";
+import {
+  DEFAULT_TIME_FILTER,
+  FEED_TABS,
+  REFRESH_DELAY_MS,
+  TIME_FILTERS,
+  isTimeFilter,
+  type TimeFilter,
+} from "@/lib/config";
 import { refreshFeed } from "@/lib/feed";
 import { UpstreamError } from "@/lib/http";
 
@@ -31,6 +38,7 @@ function isAuthorized(request: Request): boolean {
 }
 
 interface RefreshOutcome {
+  tab: string;
   filter: TimeFilter;
   ok: boolean;
   posts?: number;
@@ -45,28 +53,56 @@ async function handle(request: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: false, error: "Unauthorized." }, { status: 401 });
   }
 
-  // `?t=day` refreshes a single variant; omitting it refreshes all of them,
-  // since each time filter is cached separately.
-  const requested = new URL(request.url).searchParams.get("t");
-  const filters: readonly TimeFilter[] = isTimeFilter(requested) ? [requested] : TIME_FILTERS;
+  const query = new URL(request.url).searchParams;
+
+  // Scope the run. Reddit budgets unauthenticated requests per source IP, and
+  // every tab times every window would be far more requests than that budget
+  // allows, so the default is every tab at the default window only. Other
+  // windows are refreshed on demand when a reader selects them.
+  const requestedTab = query.get("tab");
+  const tabs = requestedTab
+    ? FEED_TABS.filter((tab) => tab.id === requestedTab.trim().toLowerCase())
+    : FEED_TABS;
+
+  const requestedFilter = query.get("t");
+  const filters: readonly TimeFilter[] = isTimeFilter(requestedFilter)
+    ? [requestedFilter]
+    : query.get("all") === "1"
+      ? TIME_FILTERS
+      : [DEFAULT_TIME_FILTER];
+
+  if (tabs.length === 0) {
+    return NextResponse.json(
+      { ok: false, error: `Unknown tab "${requestedTab}".` },
+      { status: 400 },
+    );
+  }
+
+  const jobs = tabs.flatMap((tab) => filters.map((filter) => ({ tab, filter })));
 
   const results: RefreshOutcome[] = [];
   let rateLimited = false;
 
-  for (const [index, filter] of filters.entries()) {
-    // Reddit budgets unauthenticated requests per source IP. Once it starts
-    // refusing, the remaining filters would fail too and each attempt digs the
-    // hole deeper, so stop and leave the rest to the next run.
+  for (const [index, { tab, filter }] of jobs.entries()) {
+    // Once Reddit starts refusing, the remaining jobs would fail too and each
+    // attempt digs the hole deeper, so stop and leave the rest to the next run.
     if (rateLimited) {
-      results.push({ filter, ok: false, skipped: true, error: "Skipped: rate limited earlier in this run." });
+      results.push({
+        tab: tab.id,
+        filter,
+        ok: false,
+        skipped: true,
+        error: "Skipped: rate limited earlier in this run.",
+      });
       continue;
     }
 
     if (index > 0) await sleep(REFRESH_DELAY_MS);
 
     try {
-      const snapshot = await refreshFeed(filter);
+      const snapshot = await refreshFeed(filter, tab.source);
       results.push({
+        tab: tab.id,
         filter,
         ok: true,
         posts: snapshot.posts.length,
@@ -75,6 +111,7 @@ async function handle(request: Request): Promise<NextResponse> {
     } catch (error) {
       if (error instanceof UpstreamError && error.isRateLimited) rateLimited = true;
       results.push({
+        tab: tab.id,
         filter,
         ok: false,
         error: error instanceof Error ? error.message : String(error),
@@ -89,7 +126,6 @@ async function handle(request: Request): Promise<NextResponse> {
   return NextResponse.json(
     {
       ok: succeeded > 0,
-      source: FEED_SOURCE.label,
       refreshedAt: new Date().toISOString(),
       succeeded,
       attempted: results.length,

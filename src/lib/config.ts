@@ -1,4 +1,5 @@
-import { parseFeedSourceOrDefault, type FeedSource } from "@/lib/source";
+import { type FeedSource } from "@/lib/source";
+import { findTab, resolveTabs, type FeedTab } from "@/lib/tabs";
 
 /**
  * Central configuration. Everything that a deployment might want to change
@@ -29,13 +30,29 @@ function positiveInt(value: string | undefined, fallback: number): number {
 }
 
 /**
- * Where the feed comes from. Accepts a single subreddit, several combined with
- * `+`, or a public multireddit — see `src/lib/source.ts`.
+ * Tabs to offer. `FEED_TABS` overrides them; a lone `SUBREDDIT` collapses to a
+ * single tab — see `src/lib/tabs.ts`.
  */
-export const FEED_SOURCE: FeedSource = parseFeedSourceOrDefault(process.env.SUBREDDIT);
+export const FEED_TABS: FeedTab[] = resolveTabs({
+  FEED_TABS: process.env.FEED_TABS,
+  SUBREDDIT: process.env.SUBREDDIT,
+});
 
-/** Convenience alias for the source's display label, e.g. `r/programming`. */
+/** True when there is nothing to switch between, so the tab bar is pointless. */
+export const HAS_MULTIPLE_TABS = FEED_TABS.length > 1;
+
+/** Tab used when the request does not name one. */
+export const DEFAULT_TAB: FeedTab = FEED_TABS[0];
+
+/** Source of the default tab, used where a single source is still assumed. */
+export const FEED_SOURCE: FeedSource = DEFAULT_TAB.source;
+
+/** Convenience alias for the default source's label. */
 export const SUBREDDIT = FEED_SOURCE.label;
+
+export function parseTab(value: unknown): FeedTab {
+  return findTab(FEED_TABS, value);
+}
 
 /** How many posts the page renders. */
 export const POST_COUNT = positiveInt(process.env.POST_COUNT, 10);

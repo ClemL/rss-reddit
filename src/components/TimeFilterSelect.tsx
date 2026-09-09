@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useTransition } from "react";
 
 import { DEFAULT_TIME_FILTER, TIME_FILTERS, type TimeFilter } from "@/lib/config";
+import { buildHref } from "@/lib/href";
 
 const LABELS: Record<TimeFilter, string> = {
   hour: "Past hour",
@@ -18,7 +19,15 @@ const LABELS: Record<TimeFilter, string> = {
  * Time-window picker. Navigation carries the selection in the query string so
  * each variant is a distinct, separately cached URL and remains shareable.
  */
-export function TimeFilterSelect({ value }: { value: TimeFilter }) {
+export function TimeFilterSelect({
+  value,
+  tab,
+  defaultTabId,
+}: {
+  value: TimeFilter;
+  tab: string;
+  defaultTabId: string;
+}) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
 
@@ -33,9 +42,18 @@ export function TimeFilterSelect({ value }: { value: TimeFilter }) {
         value={value}
         disabled={isPending}
         onChange={(event) => {
-          const next = event.target.value;
+          const next = event.target.value as TimeFilter;
           startTransition(() => {
-            router.push(next === DEFAULT_TIME_FILTER ? "/" : `/?t=${next}`, { scroll: false });
+            // Changing the window must keep the reader on the same tab.
+            router.push(
+              buildHref({
+                tab,
+                filter: next,
+                defaultFilter: DEFAULT_TIME_FILTER,
+                defaultTabId,
+              }),
+              { scroll: false },
+            );
           });
         }}
         className="rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm text-neutral-900 shadow-sm transition-colors hover:border-neutral-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500 disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:border-neutral-600"

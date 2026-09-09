@@ -1,13 +1,17 @@
 import { DensityToggle } from "@/components/DensityToggle";
+import { FeedUrlList } from "@/components/FeedUrlList";
+import { TabBar } from "@/components/TabBar";
 import { EmptyState } from "@/components/EmptyState";
 import { PostCard } from "@/components/PostCard";
 import { StaleNotice } from "@/components/StaleNotice";
 import { TimeFilterSelect } from "@/components/TimeFilterSelect";
 import {
+  DEFAULT_TAB,
   DEFAULT_TIME_FILTER,
-  FEED_SOURCE,
+  FEED_TABS,
+  HAS_MULTIPLE_TABS,
   POST_COUNT,
-  SUBREDDIT,
+  parseTab,
   parseTimeFilter,
   sourceFeedUrl,
   sourceWebUrl,
@@ -29,10 +33,14 @@ export default async function HomePage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = await searchParams;
-  const raw = Array.isArray(params.t) ? params.t[0] : params.t;
-  const filter = parseTimeFilter(raw, DEFAULT_TIME_FILTER);
+  const rawFilter = Array.isArray(params.t) ? params.t[0] : params.t;
+  const rawTab = Array.isArray(params.tab) ? params.tab[0] : params.tab;
 
-  const { snapshot, stale, error, rateLimited } = await getFeed(filter);
+  const filter = parseTimeFilter(rawFilter, DEFAULT_TIME_FILTER);
+  const tab = parseTab(rawTab);
+  const source = tab.source;
+
+  const { snapshot, stale, error, rateLimited } = await getFeed(filter, source);
   const posts = snapshot?.posts ?? [];
 
   return (
@@ -43,25 +51,37 @@ export default async function HomePage({
             <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
               Top {POST_COUNT} ·{" "}
               <a
-                href={sourceWebUrl(FEED_SOURCE, filter)}
+                href={sourceWebUrl(source, filter)}
                 target="_blank"
                 rel="noopener noreferrer"
-                title={FEED_SOURCE.label}
+                title={source.label}
                 className="underline-offset-4 hover:underline"
               >
-                {shortLabel(FEED_SOURCE)}
+                {HAS_MULTIPLE_TABS ? tab.label : shortLabel(source)}
               </a>
             </h1>
             <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-              Ordered as Reddit&rsquo;s RSS feed returns them.
+              {HAS_MULTIPLE_TABS
+                ? `${source.subreddits.length} subreddits, ordered as Reddit's RSS feed returns them.`
+                : "Ordered as Reddit's RSS feed returns them."}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <TimeFilterSelect value={filter} />
+            <TimeFilterSelect value={filter} tab={tab.id} defaultTabId={DEFAULT_TAB.id} />
             <DensityToggle />
           </div>
         </div>
+
+        {HAS_MULTIPLE_TABS ? (
+          <TabBar
+            tabs={FEED_TABS}
+            activeId={tab.id}
+            filter={filter}
+            defaultFilter={DEFAULT_TIME_FILTER}
+            defaultTabId={DEFAULT_TAB.id}
+          />
+        ) : null}
 
         {stale && snapshot ? (
           <StaleNotice age={relativeTime(snapshot.fetchedAt)} rateLimited={rateLimited} />
@@ -75,14 +95,14 @@ export default async function HomePage({
           ))}
         </ol>
       ) : (
-        <EmptyState subreddit={SUBREDDIT} rateLimited={rateLimited} error={error} />
+        <EmptyState source={source} rateLimited={rateLimited} error={error} />
       )}
 
       <footer className="mt-10 border-t border-neutral-200 pt-5 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
         <p>
           Source:{" "}
           <a
-            href={sourceFeedUrl(FEED_SOURCE, filter)}
+            href={sourceFeedUrl(source, filter)}
             target="_blank"
             rel="noopener noreferrer"
             className="underline underline-offset-2"
@@ -97,6 +117,8 @@ export default async function HomePage({
             {ageInSeconds(snapshot.fetchedAt)}s old).
           </p>
         ) : null}
+
+        {HAS_MULTIPLE_TABS ? <FeedUrlList tabs={FEED_TABS} filter={filter} /> : null}
       </footer>
     </main>
   );

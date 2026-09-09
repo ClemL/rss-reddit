@@ -30,8 +30,10 @@ describe("parseFeedSource", () => {
     expect(source.kind).toBe("combined");
     expect(source.path).toBe("r/programming+rust+golang");
     expect(source.subreddits).toEqual(["programming", "rust", "golang"]);
-    // The cache key must stay distinct per combination.
-    expect(source.key).toBe("programming_rust_golang");
+    // The cache key must stay short and distinct per combination.
+    expect(source.key).toMatch(/^r_programming_and2_[0-9a-z]+$/);
+    expect(parseFeedSource("programming+rust").key).not.toBe(source.key);
+    expect(source.key.length).toBeLessThan(40);
   });
 
   it("parses a public multireddit in both u/ and user/ forms", () => {
@@ -80,6 +82,7 @@ describe("parseFeedSource", () => {
     expect(parseFeedSourceOrDefault(undefined).path).toBe("r/programming");
     expect(parseFeedSourceOrDefault("!!!").path).toBe("r/programming");
     expect(parseFeedSourceOrDefault("rust").path).toBe("r/rust");
+    expect(parseFeedSourceOrDefault("rust").key).toBe("r_rust");
   });
 });
 
