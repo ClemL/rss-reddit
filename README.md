@@ -35,12 +35,20 @@ contacted on a schedule, and the page reads whatever the cache holds.
 
 ### The refresh cron
 
-`vercel.json` registers a cron job that calls the `/api/refresh` route handler every 15
-minutes:
+`vercel.json` registers a cron job that calls the `/api/refresh` route handler:
 
 ```json
-{ "crons": [{ "path": "/api/refresh", "schedule": "*/15 * * * *" }] }
+{ "crons": [{ "path": "/api/refresh", "schedule": "0 8 * * *" }] }
 ```
+
+**The default schedule is once daily, because Vercel's Hobby plan rejects anything more
+frequent at deploy time** — see [Plan limits](#plan-limits-read-before-deploying) below.
+On a Pro plan, change it to `*/15 * * * *` for a 15-minute refresh.
+
+A daily cron is not a problem for freshness. The cron is a warm-up and a backstop, not
+the only refresh path: a page render still refreshes data that has outlived
+`REVALIDATE_SECONDS` on its own (see the two backends below). The cron's real value is
+keeping *all six* time filters warm, including ones nobody has visited recently.
 
 `/api/refresh` fetches and parses the feed for **every** time filter and stores each one
 separately, with a 400 ms pause between upstream requests so a refresh is not a burst.
@@ -112,7 +120,7 @@ with no configuration at all. See `.env.example`.
 | `SUBREDDIT`           | `programming`              | Subreddit to read, without the `r/` prefix                      |
 | `DEFAULT_TIME_FILTER` | `day`                      | `hour`, `day`, `week`, `month`, `year`, or `all`                |
 | `POST_COUNT`          | `10`                       | Posts rendered on the page                                      |
-| `REVALIDATE_SECONDS`  | `900`                      | Cache lifetime; keep aligned with the cron schedule             |
+| `REVALIDATE_SECONDS`  | `900`                      | Cache lifetime; governs refresh frequency in normal operation    |
 | `CRON_SECRET`         | unset                      | Bearer token required by `/api/refresh` when set                |
 | `KV_REST_API_URL`     | unset                      | Enables KV caching (with the token below)                       |
 | `KV_REST_API_TOKEN`   | unset                      | Enables KV caching (with the URL above)                         |
@@ -142,10 +150,30 @@ exactly that many posts.
 
 ### Changing the refresh interval
 
-Edit the `schedule` in `vercel.json` and set `REVALIDATE_SECONDS` to the equivalent
-number of seconds so the two agree. Note that Vercel's Hobby plan limits cron jobs to
-one invocation per day; on Hobby, leave `STRICT_CACHE_ONLY` unset so page renders can
-still refresh expired data on their own.
+`REVALIDATE_SECONDS` (default `900`) controls how long cached data is considered fresh,
+and is what actually governs refresh frequency in normal operation. Change it alone to
+make the site refresh more or less often.
+
+The cron `schedule` in `vercel.json` is separate, and is constrained by your Vercel plan
+(below). On Pro, setting it to match `REVALIDATE_SECONDS` — `*/15 * * * *` for 900
+seconds — means the cron does the refreshing and visitors never trigger an upstream
+fetch. On Hobby, leave the daily schedule and leave `STRICT_CACHE_ONLY` unset so page
+renders keep data fresh themselves.
+
+### Plan limits (read before deploying)
+
+Vercel's Hobby plan permits **at most one cron invocation per day**, and this is enforced
+when the deployment is created, not at runtime. A schedule such as `*/15 * * * *` or even
+the hourly `0 * * * *` **fails the deployment** with:
+
+```
+Hobby accounts are limited to daily cron jobs.
+```
+
+The committed schedule (`0 8 * * *`) is daily, so it deploys on any plan. Hobby also caps
+a project at two cron jobs, and fires a daily job at some point within its scheduled hour
+rather than exactly on the minute. Pro removes the frequency limit; see
+[Vercel's cron pricing docs](https://vercel.com/docs/cron-jobs/usage-and-pricing).
 
 ## Running locally
 
@@ -171,7 +199,8 @@ single-entry feeds.
 2. Optionally add a Redis store from the Vercel Marketplace; it populates
    `KV_REST_API_URL` and `KV_REST_API_TOKEN` for you.
 3. Set `CRON_SECRET` to a random string.
-4. Deploy. The cron in `vercel.json` is registered on deployment.
+4. Deploy. The cron in `vercel.json` is registered on deployment. If you are on Pro and
+   want the 15-minute refresh, change the schedule to `*/15 * * * *` first.
 5. Warm the cache immediately rather than waiting for the first cron tick:
 
    ```bash
