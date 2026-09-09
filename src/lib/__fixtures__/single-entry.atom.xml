@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Top posts from programming</title>
+  <entry>
+    <author><name>/u/solo</name><uri>https://www.reddit.com/user/solo</uri></author>
+    <content type="html">&lt;span&gt;&lt;a href="https://example.net/only"&gt;[link]&lt;/a&gt;&lt;/span&gt; &lt;span&gt;&lt;a href="https://www.reddit.com/r/programming/comments/eee555/only/"&gt;[comments]&lt;/a&gt;&lt;/span&gt;</content>
+    <id>t3_eee555</id>
+    <link href="https://www.reddit.com/r/programming/comments/eee555/only/"/>
+    <published>2026-09-09T11:00:00+00:00</published>
+    <title>The only entry</title>
+  </entry>
+</feed>

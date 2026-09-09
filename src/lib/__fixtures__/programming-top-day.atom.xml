@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <category term="programming" label="r/programming"/>
+  <updated>2026-09-09T12:00:00+00:00</updated>
+  <id>/r/programming/top/.rss?t=day</id>
+  <link rel="self" href="https://www.reddit.com/r/programming/top/.rss?t=day" type="application/atom+xml"/>
+  <link rel="alternate" href="https://www.reddit.com/r/programming/top/" type="text/html"/>
+  <subtitle>Computer Programming</subtitle>
+  <title>Top posts from programming</title>
+  <entry>
+    <author><name>/u/linkposter</name><uri>https://www.reddit.com/user/linkposter</uri></author>
+    <category term="programming" label="r/programming"/>
+    <content type="html">&lt;table&gt; &lt;tr&gt;&lt;td&gt; &lt;span&gt;&lt;a href="https://blog.example.com/why-types-matter"&gt;[link]&lt;/a&gt;&lt;/span&gt; &amp;#32; &lt;span&gt;&lt;a href="https://www.reddit.com/r/programming/comments/aaa111/why_types_matter/"&gt;[comments]&lt;/a&gt;&lt;/span&gt; &lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</content>
+    <id>t3_aaa111</id>
+    <link href="https://www.reddit.com/r/programming/comments/aaa111/why_types_matter/"/>
+    <updated>2026-09-09T09:30:00+00:00</updated>
+    <published>2026-09-09T09:30:00+00:00</published>
+    <title>Why types matter more than you think</title>
+  </entry>
+  <entry>
+    <author><name>/u/textposter</name><uri>https://www.reddit.com/user/textposter</uri></author>
+    <category term="programming" label="r/programming"/>
+    <content type="html">&lt;!-- SC_OFF --&gt;&lt;div class="md"&gt;&lt;p&gt;I spent &amp;lt;three&amp;gt; weeks rewriting our build pipeline in Rust &amp;amp; the results surprised me.&lt;/p&gt; &lt;p&gt;Cold builds dropped from 11 minutes to 90 seconds.&lt;/p&gt;&lt;/div&gt;&lt;!-- SC_ON --&gt; &amp;#32; submitted by &amp;#32; &lt;a href="https://www.reddit.com/user/textposter"&gt; /u/textposter &lt;/a&gt; &lt;br/&gt; &lt;span&gt;&lt;a href="https://www.reddit.com/r/programming/comments/bbb222/we_rewrote_our_build_pipeline/"&gt;[link]&lt;/a&gt;&lt;/span&gt; &amp;#32; &lt;span&gt;&lt;a href="https://www.reddit.com/r/programming/comments/bbb222/we_rewrote_our_build_pipeline/"&gt;[comments]&lt;/a&gt;&lt;/span&gt;</content>
+    <id>t3_bbb222</id>
+    <link href="https://www.reddit.com/r/programming/comments/bbb222/we_rewrote_our_build_pipeline/"/>
+    <updated>2026-09-09T07:15:00+00:00</updated>
+    <published>2026-09-09T07:15:00+00:00</published>
+    <title>We rewrote our build pipeline &amp; cut CI time by 88%</title>
+  </entry>
+  <entry>
+    <author><name>/u/numerically</name><uri>https://www.reddit.com/user/numerically</uri></author>
+    <category term="programming" label="r/programming"/>
+    <content type="html">&lt;table&gt; &lt;tr&gt;&lt;td&gt; &lt;span&gt;&lt;a href="http://legacy.example.org/2038"&gt;[link]&lt;/a&gt;&lt;/span&gt; &amp;#32; &lt;span&gt;&lt;a href="https://www.reddit.com/r/programming/comments/ccc333/2038/"&gt;[comments]&lt;/a&gt;&lt;/span&gt; &lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</content>
+    <id>t3_ccc333</id>
+    <link href="https://www.reddit.com/r/programming/comments/ccc333/2038/"/>
+    <updated>2026-09-08T22:00:00+00:00</updated>
+    <published>2026-09-08T22:00:00+00:00</published>
+    <title>2038</title>
+  </entry>
+  <entry>
+    <author><name>/u/malformed</name><uri>https://www.reddit.com/user/malformed</uri></author>
+    <category term="programming" label="r/programming"/>
+    <content type="html">&lt;table&gt;&lt;tr&gt;&lt;td&gt;no anchors here at all&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</content>
+    <id>t3_ddd444</id>
+    <link href="https://www.reddit.com/r/programming/comments/ddd444/feed_without_a_link_anchor/"/>
+    <updated>2026-09-08T18:45:00+00:00</updated>
+    <published>2026-09-08T18:45:00+00:00</published>
+    <title>Feed entry without a [link] anchor</title>
+  </entry>
+</feed>
