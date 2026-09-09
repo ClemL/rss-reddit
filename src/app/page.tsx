@@ -27,6 +27,19 @@ import { relativeTime } from "@/lib/time";
  */
 export const dynamic = "force-dynamic";
 
+/**
+ * Ceiling on the whole render. Vercel's default for a serverless function is
+ * 300 seconds, which is not a useful bound for a page: a stalled upstream would
+ * hold the request open until the platform returns FUNCTION_INVOCATION_TIMEOUT
+ * and the visitor sees a 504 instead of the page. `getFeed` gives up well
+ * before this (`RENDER_BUDGET_MS`) and renders the cached copy or the empty
+ * state, so reaching this limit should not be possible; it is the backstop.
+ *
+ * Route segment config must be statically analyzable, so this is a literal
+ * rather than a value read from the environment.
+ */
+export const maxDuration = 30;
+
 export default async function HomePage({
   searchParams,
 }: {

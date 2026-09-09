@@ -84,6 +84,40 @@ export const RENDER_FETCH_ATTEMPTS = positiveInt(process.env.RENDER_FETCH_ATTEMP
 export const REFRESH_FETCH_ATTEMPTS = positiveInt(process.env.REFRESH_FETCH_ATTEMPTS, 3);
 
 /**
+ * Hard ceiling on a single upstream request, aborted rather than left hanging.
+ * `fetch` has no default timeout, so without this a connection Reddit accepts
+ * and never answers runs until the platform kills the whole function.
+ */
+export const UPSTREAM_TIMEOUT_MS = positiveInt(process.env.UPSTREAM_TIMEOUT_MS, 8_000);
+
+/**
+ * Total time a page render may spend on I/O before it stops trying and renders
+ * whatever it already has. Must stay comfortably below the `maxDuration`
+ * exported by the page so the response is produced by the app, not by the
+ * platform's timeout.
+ */
+export const RENDER_BUDGET_MS = positiveInt(process.env.RENDER_BUDGET_MS, 9_000);
+
+/**
+ * Total time the /api/refresh cron may spend before it stops and reports what
+ * it managed. Kept below that route's `maxDuration` for the same reason.
+ */
+export const REFRESH_BUDGET_MS = positiveInt(process.env.REFRESH_BUDGET_MS, 45_000);
+
+/**
+ * Hard ceiling on a single KV request. The KV store is the fast path, so an
+ * unresponsive one must be abandoned quickly rather than delaying the render it
+ * exists to accelerate.
+ */
+export const KV_TIMEOUT_MS = positiveInt(process.env.KV_TIMEOUT_MS, 2_000);
+
+/**
+ * Below this much remaining budget an upstream request is not worth starting:
+ * it would abort mid-flight, having spent the time without producing data.
+ */
+export const MIN_FETCH_BUDGET_MS = positiveInt(process.env.MIN_FETCH_BUDGET_MS, 400);
+
+/**
  * Pause between the cron's per-filter requests. Reddit budgets unauthenticated
  * requests per source IP, so spacing them out matters more than finishing fast.
  */

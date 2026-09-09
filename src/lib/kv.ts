@@ -1,3 +1,5 @@
+import { KV_TIMEOUT_MS } from "@/lib/config";
+
 /**
  * Minimal Redis-over-HTTP client for the key/value store Vercel provisions.
  *
@@ -8,6 +10,10 @@
  *
  * If neither pair of variables is present the app falls back to Next.js's
  * built-in fetch cache; see `src/lib/feed.ts`.
+ *
+ * Every request is bounded by a timeout. This store sits in front of the render
+ * path, so an unreachable or wedged endpoint would otherwise hold a request open
+ * indefinitely — `fetch` does not time out on its own.
  */
 
 const REST_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
@@ -21,21 +27,36 @@ interface RestResponse<T> {
   error?: string;
 }
 
-async function command<T>(args: (string | number)[]): Promise<T | null> {
+async function command<T>(
+  args: (string | number)[],
+  timeoutMs: number = KV_TIMEOUT_MS,
+): Promise<T | null> {
   if (!REST_URL || !REST_TOKEN) throw new Error("KV is not configured.");
+  if (!(timeoutMs > 0)) throw new Error("KV request skipped: no time left in the budget.");
 
-  const response = await fetch(REST_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${REST_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(args),
-    // The KV store is the cache; its own responses must never be cached.
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(REST_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${REST_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(args),
+      // The KV store is the cache; its own responses must never be cached.
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (cause) {
+    const name = (cause as { name?: string } | null | undefined)?.name;
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new Error(`KV request timed out after ${timeoutMs}ms.`, { cause });
+    }
+    throw new Error(`KV request failed: ${(cause as Error).message}`, { cause });
+  }
 
   if (!response.ok) {
+    await response.body?.cancel().catch(() => {});
     throw new Error(`KV request failed with HTTP ${response.status}.`);
   }
 
@@ -45,8 +66,8 @@ async function command<T>(args: (string | number)[]): Promise<T | null> {
 }
 
 /** Reads and JSON-decodes a key. Returns null when absent or undecodable. */
-export async function kvGetJson<T>(key: string): Promise<T | null> {
-  const raw = await command<string>(["GET", key]);
+export async function kvGetJson<T>(key: string, timeoutMs?: number): Promise<T | null> {
+  const raw = await command<string>(["GET", key], timeoutMs);
   if (typeof raw !== "string") return null;
   try {
     return JSON.parse(raw) as T;
@@ -63,6 +84,6 @@ export async function kvGetJson<T>(key: string): Promise<T | null> {
  * expiring it would remove the very thing the fallback depends on. Freshness is
  * decided from the snapshot's own `fetchedAt`, not from key expiry.
  */
-export async function kvSetJson(key: string, value: unknown): Promise<void> {
-  await command(["SET", key, JSON.stringify(value)]);
+export async function kvSetJson(key: string, value: unknown, timeoutMs?: number): Promise<void> {
+  await command(["SET", key, JSON.stringify(value)], timeoutMs);
 }

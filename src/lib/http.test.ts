@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { UpstreamError, fetchWithRetry, parseRetryAfter } from "@/lib/http";
+import { UpstreamError, budgetFor, fetchOnce, fetchWithRetry, parseRetryAfter } from "@/lib/http";
 
 const FAST = { baseDelayMs: 1, maxDelayMs: 5, totalBudgetMs: 100, timeoutMs: 1000 };
 
@@ -12,6 +12,21 @@ function responses(...specs: (number | "network")[]): typeof fetch {
     if (spec === "network") throw new TypeError("fetch failed");
     return new Response(spec === 200 ? "<feed/>" : "", { status: spec });
   }) as unknown as typeof fetch;
+}
+
+/**
+ * Models the one behavior a plain `vi.fn()` stub does not: a real `fetch`
+ * rejects when its signal aborts. Without that, a request that is never
+ * answered hangs forever — which is exactly the production failure these tests
+ * cover, so the stub has to reproduce it.
+ */
+function hangingFetch(): typeof fetch {
+  return vi.fn(
+    (_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal!.reason));
+      }),
+  ) as unknown as typeof fetch;
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -135,5 +150,105 @@ describe("fetchWithRetry", () => {
       }),
     ).rejects.toBeInstanceOf(UpstreamError);
     expect(Date.now() - started).toBeLessThan(600);
+  });
+});
+
+describe("budgetFor", () => {
+  it("uses the full timeout when there is no deadline", () => {
+    expect(budgetFor(8_000)).toBe(8_000);
+  });
+
+  it("clamps to the time left before the deadline", () => {
+    const now = 1_000_000;
+    expect(budgetFor(8_000, now + 1_500, now)).toBe(1_500);
+  });
+
+  it("goes non-positive once the deadline has passed", () => {
+    const now = 1_000_000;
+    expect(budgetFor(8_000, now - 1, now)).toBeLessThanOrEqual(0);
+  });
+});
+
+describe("fetchOnce", () => {
+  it("aborts a request the upstream never answers", async () => {
+    vi.stubGlobal("fetch", hangingFetch());
+
+    const started = Date.now();
+    const error = await fetchOnce("https://example.test/feed", {}, 80)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(UpstreamError);
+    expect((error as UpstreamError).isTimeout).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("refuses to start a request with no time left", async () => {
+    const stub = hangingFetch();
+    vi.stubGlobal("fetch", stub);
+
+    const error = await fetchOnce("https://example.test/feed", {}, 0)
+      .catch((caught: unknown) => caught);
+
+    expect((error as UpstreamError).isTimeout).toBe(true);
+    expect(stub).not.toHaveBeenCalled();
+  });
+
+  it("passes an abort signal even when the caller supplied none", async () => {
+    const stub = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return new Response("<feed/>", { status: 200 });
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", stub);
+
+    await expect(fetchOnce("https://example.test/feed", {}, 1_000)).resolves.toBeInstanceOf(Response);
+  });
+});
+
+describe("fetchWithRetry deadlines", () => {
+  it("returns by the deadline rather than per-attempt timeouts", async () => {
+    vi.stubGlobal("fetch", hangingFetch());
+
+    const started = Date.now();
+    const error = await fetchWithRetry("https://example.test/feed", {}, {
+      attempts: 3,
+      baseDelayMs: 1,
+      maxDelayMs: 5,
+      totalBudgetMs: 100,
+      // Ten seconds per attempt, but only 150ms of deadline: the deadline wins.
+      timeoutMs: 10_000,
+      deadline: Date.now() + 150,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(UpstreamError);
+    expect((error as UpstreamError).isTimeout).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it("makes no request at all once the deadline has passed", async () => {
+    const stub = responses(200);
+    vi.stubGlobal("fetch", stub);
+
+    await expect(
+      fetchWithRetry("https://example.test/feed", {}, {
+        attempts: 3,
+        ...FAST,
+        deadline: Date.now() - 1,
+      }),
+    ).rejects.toBeInstanceOf(UpstreamError);
+    expect(stub).not.toHaveBeenCalled();
+  });
+
+  it("still retries a transient failure when the deadline allows it", async () => {
+    const stub = responses(503, 200);
+    vi.stubGlobal("fetch", stub);
+
+    const response = await fetchWithRetry("https://example.test/feed", {}, {
+      attempts: 3,
+      ...FAST,
+      deadline: Date.now() + 5_000,
+    });
+
+    expect(response.status).toBe(200);
+    expect(stub).toHaveBeenCalledTimes(2);
   });
 });

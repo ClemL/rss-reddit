@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import {
   DEFAULT_TIME_FILTER,
   FEED_TABS,
+  MIN_FETCH_BUDGET_MS,
+  REFRESH_BUDGET_MS,
   REFRESH_DELAY_MS,
   TIME_FILTERS,
   isTimeFilter,
@@ -16,8 +18,9 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 /**
- * Vercel kills the function at this many seconds. The refresh paces itself well
- * inside the limit, but a slow upstream should not take the whole budget.
+ * Vercel kills the function at this many seconds. The run gives itself
+ * `REFRESH_BUDGET_MS` and reports what it managed, so this is the backstop
+ * rather than the mechanism.
  */
 export const maxDuration = 60;
 
@@ -83,6 +86,13 @@ async function handle(request: Request): Promise<NextResponse> {
   const results: RefreshOutcome[] = [];
   let rateLimited = false;
 
+  // One absolute deadline for the whole run, shared by every request it makes.
+  // Without it the worst case is (jobs x attempts x per-request timeout), which
+  // for the default nine tabs runs well past `maxDuration` and gets the run
+  // killed with nothing reported.
+  const deadline = Date.now() + REFRESH_BUDGET_MS;
+  const remainingMs = (): number => deadline - Date.now();
+
   for (const [index, { tab, filter }] of jobs.entries()) {
     // Once Reddit starts refusing, the remaining jobs would fail too and each
     // attempt digs the hole deeper, so stop and leave the rest to the next run.
@@ -97,10 +107,22 @@ async function handle(request: Request): Promise<NextResponse> {
       continue;
     }
 
-    if (index > 0) await sleep(REFRESH_DELAY_MS);
+    const pauseMs = index > 0 ? REFRESH_DELAY_MS : 0;
+    if (remainingMs() - pauseMs < MIN_FETCH_BUDGET_MS) {
+      results.push({
+        tab: tab.id,
+        filter,
+        ok: false,
+        skipped: true,
+        error: "Skipped: the run's time budget was exhausted.",
+      });
+      continue;
+    }
+
+    if (pauseMs > 0) await sleep(pauseMs);
 
     try {
-      const snapshot = await refreshFeed(filter, tab.source);
+      const snapshot = await refreshFeed(filter, tab.source, { deadline });
       results.push({
         tab: tab.id,
         filter,
