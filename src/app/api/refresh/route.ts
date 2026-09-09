@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
 
-import { SUBREDDIT, TIME_FILTERS, isTimeFilter, type TimeFilter } from "@/lib/config";
+import { REFRESH_DELAY_MS, SUBREDDIT, TIME_FILTERS, isTimeFilter, type TimeFilter } from "@/lib/config";
 import { refreshFeed } from "@/lib/feed";
+import { UpstreamError } from "@/lib/http";
 
 /** The cron job must always execute; never serve this route from a cache. */
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-/** Courtesy pause between upstream requests so a refresh is not a burst. */
-const DELAY_BETWEEN_FETCHES_MS = 400;
+/**
+ * Vercel kills the function at this many seconds. The refresh paces itself well
+ * inside the limit, but a slow upstream should not take the whole budget.
+ */
+export const maxDuration = 60;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -32,6 +36,8 @@ interface RefreshOutcome {
   posts?: number;
   fetchedAt?: string;
   error?: string;
+  /** Set when the filter was not attempted because the budget was exhausted. */
+  skipped?: boolean;
 }
 
 async function handle(request: Request): Promise<NextResponse> {
@@ -45,9 +51,19 @@ async function handle(request: Request): Promise<NextResponse> {
   const filters: readonly TimeFilter[] = isTimeFilter(requested) ? [requested] : TIME_FILTERS;
 
   const results: RefreshOutcome[] = [];
+  let rateLimited = false;
 
   for (const [index, filter] of filters.entries()) {
-    if (index > 0) await sleep(DELAY_BETWEEN_FETCHES_MS);
+    // Reddit budgets unauthenticated requests per source IP. Once it starts
+    // refusing, the remaining filters would fail too and each attempt digs the
+    // hole deeper, so stop and leave the rest to the next run.
+    if (rateLimited) {
+      results.push({ filter, ok: false, skipped: true, error: "Skipped: rate limited earlier in this run." });
+      continue;
+    }
+
+    if (index > 0) await sleep(REFRESH_DELAY_MS);
+
     try {
       const snapshot = await refreshFeed(filter);
       results.push({
@@ -57,6 +73,7 @@ async function handle(request: Request): Promise<NextResponse> {
         fetchedAt: snapshot.fetchedAt,
       });
     } catch (error) {
+      if (error instanceof UpstreamError && error.isRateLimited) rateLimited = true;
       results.push({
         filter,
         ok: false,
@@ -76,6 +93,7 @@ async function handle(request: Request): Promise<NextResponse> {
       refreshedAt: new Date().toISOString(),
       succeeded,
       attempted: results.length,
+      rateLimited,
       results,
     },
     { status: succeeded > 0 ? 200 : 502 },

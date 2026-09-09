@@ -47,6 +47,24 @@ export const DEFAULT_TIME_FILTER: TimeFilter = isTimeFilter(process.env.DEFAULT_
 export const STALE_AFTER_SECONDS = REVALIDATE_SECONDS * 2;
 
 /**
+ * Retry budget for a page render. Kept to a single extra attempt so a cold cache
+ * cannot stall the response; the render falls back to cached data instead.
+ */
+export const RENDER_FETCH_ATTEMPTS = positiveInt(process.env.RENDER_FETCH_ATTEMPTS, 2);
+
+/**
+ * Retry budget for the /api/refresh cron, which has far more headroom than a
+ * page render and is where it is worth fighting for the data.
+ */
+export const REFRESH_FETCH_ATTEMPTS = positiveInt(process.env.REFRESH_FETCH_ATTEMPTS, 3);
+
+/**
+ * Pause between the cron's per-filter requests. Reddit budgets unauthenticated
+ * requests per source IP, so spacing them out matters more than finishing fast.
+ */
+export const REFRESH_DELAY_MS = positiveInt(process.env.REFRESH_DELAY_MS, 1500);
+
+/**
  * Reddit rejects some default client user agents outright. A descriptive one is
  * requested by Reddit's API rules and reduces the odds of a 429/403.
  */

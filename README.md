@@ -95,11 +95,48 @@ render does not directly observe an upstream failure. Use KV if you have it.
 
 A failed or non-200 fetch never produces an error page. The last successfully cached
 snapshot keeps being served, and a small "data may be stale" badge appears in the header
-once the data on hand is older than twice `REVALIDATE_SECONDS` (30 minutes by default).
-The badge clears by itself on the next successful refresh.
+once the data on hand is older than twice `REVALIDATE_SECONDS` (30 minutes by default),
+or as soon as a refresh actually fails. The badge names rate limiting specifically when
+that is the cause, and clears by itself on the next successful refresh.
+
+Transient failures are retried with exponential backoff and full jitter. The upstream's
+`Retry-After` header is honored but capped, so an hour-long hint never blocks a request.
+Retry budgets differ by caller: a page render gets 2 attempts, because a visitor should
+not wait on a cold cache, while `/api/refresh` gets 3. A 403 is never retried — from a
+datacenter IP that means a standing block, and retrying only spends more of the budget.
 
 Only one situation shows no posts: a completely cold cache combined with an unreachable
-Reddit. In that case the page explains what happened instead of erroring.
+Reddit. The page then explains what happened, links out to the subreddit, and offers a
+retry. It deliberately renders **no** placeholder or bundled sample posts, because
+fabricated entries presented as live Reddit data would be worse than an honest empty page.
+
+### Rate limiting (HTTP 429)
+
+This is the most likely problem you will hit in production, and it is usually not caused
+by your own traffic.
+
+Reddit budgets its unauthenticated feed **per source IP**. On Vercel — and any serverless
+host — outbound requests leave from a shared egress pool, so that budget is shared with
+every other tenant using the same address. Reddit's public `.rss` endpoints allow roughly
+15–18 sequential requests per IP before returning 429 for everything, and there is no
+separate budget per endpoint. A deployment making only a handful of requests an hour can
+therefore still be refused.
+
+What this app does about it:
+
+- Retries transient 429s with backoff and jitter, which clears the common short-lived case.
+- Serves the last cached snapshot with a rate-limit badge instead of failing.
+- **Stops the refresh run at the first 429** rather than attempting the remaining time
+  filters, since those would fail too and each attempt digs the hole deeper.
+- Spaces the cron's per-filter requests `REFRESH_DELAY_MS` apart (1500 ms by default).
+
+If 429s persist rather than clearing, retrying is not the answer — the shared IP is
+saturated or blocked, and the fix is to stop being unauthenticated. Reddit's OAuth Data
+API budgets **100 queries per minute per OAuth client ID** rather than per IP, is free for
+non-commercial use, and is unaffected by what other tenants on the IP are doing.
+Registering an app at <https://www.reddit.com/prefs/apps> and switching the fetch in
+`src/lib/feed.ts` to a `client_credentials` token against `oauth.reddit.com` is the
+supported path. It also returns scores and comment counts, which the RSS feed does not.
 
 Observed behavior with a 20-second revalidate window and a simulated Reddit outage:
 
@@ -125,6 +162,9 @@ with no configuration at all. See `.env.example`.
 | `KV_REST_API_URL`     | unset                      | Enables KV caching (with the token below)                       |
 | `KV_REST_API_TOKEN`   | unset                      | Enables KV caching (with the URL above)                         |
 | `STRICT_CACHE_ONLY`   | unset                      | `1` stops page renders contacting Reddit at all (KV mode only)  |
+| `RENDER_FETCH_ATTEMPTS` | `2`                      | Upstream attempts allowed during a page render                  |
+| `REFRESH_FETCH_ATTEMPTS` | `3`                     | Upstream attempts allowed in `/api/refresh`                     |
+| `REFRESH_DELAY_MS`    | `1500`                     | Pause between the cron's per-filter requests                    |
 | `REDDIT_USER_AGENT`   | `web:rss-reddit:1.0.0 …`   | Descriptive user agent, as Reddit asks for                      |
 | `REDDIT_BASE_URL`     | `https://www.reddit.com`   | Feed origin; for pointing at a local mock in testing            |
 
@@ -219,10 +259,12 @@ from cloud provider IP ranges, which includes Vercel's. **Nothing should be buil
 assumption that it will keep working.**
 
 The code is written with that in mind: fetch failures degrade to cached data rather than
-errors, the parser tolerates missing fields instead of throwing, and the whole upstream
-dependency is confined to `src/lib/atom.ts` and `src/lib/feed.ts`. If the endpoint
-changes shape or disappears, those two files are what you replace — with Reddit's
-authenticated OAuth API, or another source entirely.
+errors, transient failures are retried, the parser tolerates missing fields instead of
+throwing, and the whole upstream dependency is confined to `src/lib/atom.ts`,
+`src/lib/http.ts` and `src/lib/feed.ts`. If the endpoint changes shape or disappears,
+those are the files you replace — with Reddit's authenticated OAuth API, or another
+source entirely. See [Rate limiting](#rate-limiting-http-429) for the most common way
+this bites in practice.
 
 ## Project layout
 
@@ -237,9 +279,11 @@ src/
     PostCard.tsx          one post
     TimeFilterSelect.tsx  time window dropdown (the only client component)
     StaleNotice.tsx       "data may be stale" badge
+    EmptyState.tsx        cold-cache-and-unreachable explanation
   lib/
     config.ts             environment configuration and feed URLs
     atom.ts               Atom parsing and post normalization
+    http.ts               retrying fetch, backoff, Retry-After handling
     feed.ts               caching, stale fallback, refresh
     kv.ts                 Redis-over-HTTP client
     time.ts               relative time and host formatting

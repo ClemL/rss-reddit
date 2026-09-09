@@ -1,3 +1,4 @@
+import { EmptyState } from "@/components/EmptyState";
 import { PostCard } from "@/components/PostCard";
 import { StaleNotice } from "@/components/StaleNotice";
 import { TimeFilterSelect } from "@/components/TimeFilterSelect";
@@ -27,7 +28,7 @@ export default async function HomePage({
   const raw = Array.isArray(params.t) ? params.t[0] : params.t;
   const filter = parseTimeFilter(raw, DEFAULT_TIME_FILTER);
 
-  const { snapshot, stale, error } = await getFeed(filter);
+  const { snapshot, stale, error, rateLimited } = await getFeed(filter);
   const posts = snapshot?.posts ?? [];
 
   return (
@@ -55,7 +56,7 @@ export default async function HomePage({
         </div>
 
         {stale && snapshot ? (
-          <StaleNotice age={relativeTime(snapshot.fetchedAt)} />
+          <StaleNotice age={relativeTime(snapshot.fetchedAt)} rateLimited={rateLimited} />
         ) : null}
       </header>
 
@@ -66,14 +67,7 @@ export default async function HomePage({
           ))}
         </ol>
       ) : (
-        <div className="mt-10 rounded-lg border border-dashed border-neutral-300 p-8 text-center dark:border-neutral-700">
-          <p className="text-sm font-medium">No posts to show yet.</p>
-          <p className="mx-auto mt-2 max-w-md text-sm text-neutral-500 dark:text-neutral-400">
-            {error
-              ? `The feed could not be reached and nothing has been cached yet: ${error}`
-              : "The cache is empty. Trigger /api/refresh, or wait for the scheduled refresh."}
-          </p>
-        </div>
+        <EmptyState subreddit={SUBREDDIT} rateLimited={rateLimited} error={error} />
       )}
 
       <footer className="mt-10 border-t border-neutral-200 pt-5 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400">
